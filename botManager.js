@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BOTS_DIR = path.join(__dirname, '../bots');
+const BOTS_DIR = path.join(__dirname, './bots');
 
 // Ensure bots directory exists
 if (!fs.existsSync(BOTS_DIR)) {
