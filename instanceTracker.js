@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import botManager from './botManager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const INSTANCES_FILE = path.join(__dirname, '../instances.json');
+const INSTANCES_FILE = path.join(__dirname, './instances.json');
 
 /**
  * Load instances from file
