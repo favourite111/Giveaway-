@@ -1,6 +1,6 @@
 import express from 'express';
-import botManager from './lib/botManager.js';
-import instanceTracker from './lib/instanceTracker.js';
+import botManager from './botManager.js';
+import instanceTracker from './instanceTracker.js';
 
 const app = express();
 const DEPLOYER_PORT = 5000;
