@@ -4,6 +4,11 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 👇 BOT TEMPLATE (source code lives here)
+const TEMPLATE_DIR = path.join(__dirname, '../code');
+
+// 👇 RUNNING BOTS DIRECTORY
 const BOTS_DIR = path.join(__dirname, '../bots');
 
 // Ensure bots directory exists
@@ -21,48 +26,46 @@ const runningProcesses = new Map();
 export function createBotFolder(phoneNumber, session, port) {
     try {
         const botFolder = path.join(BOTS_DIR, `bot_${phoneNumber}`);
-        
-        // Create folder if it doesn't exist
+
+        // Create bot folder
         if (!fs.existsSync(botFolder)) {
             fs.mkdirSync(botFolder, { recursive: true });
             console.log(`📁 Created bot folder: ${botFolder}`);
         }
 
-        // Copy package.json from root (contains launcher dependencies)
-        const pkgSrc = path.join(__dirname, '..', 'package.json');
+        // Copy bot package.json from template
+        const pkgSrc = path.join(TEMPLATE_DIR, 'package.json');
         const pkgDest = path.join(botFolder, 'package.json');
-        if (fs.existsSync(pkgSrc)) {
-            fs.copyFileSync(pkgSrc, pkgDest);
+        if (!fs.existsSync(pkgSrc)) {
+            throw new Error('Bot template package.json not found');
+        }
+        fs.copyFileSync(pkgSrc, pkgDest);
+
+        // Copy bot entry file (index.js)
+        const entrySrc = path.join(TEMPLATE_DIR, 'index.js');
+        const entryDest = path.join(botFolder, 'index.js');
+        if (!fs.existsSync(entrySrc)) {
+            throw new Error('Bot template index.js not found');
+        }
+        fs.copyFileSync(entrySrc, entryDest);
+
+        // Copy bot src directory (if exists)
+        const srcDir = path.join(TEMPLATE_DIR, 'src');
+        const destDir = path.join(botFolder, 'src');
+        if (fs.existsSync(srcDir)) {
+            fs.cpSync(srcDir, destDir, { recursive: true });
         }
 
-        // Copy launcher files (index.js / main.js) from root
-        const launcherFiles = ['index.js', 'main.js'];
-        launcherFiles.forEach(file => {
-            const src = path.join(__dirname, '..', file);
-            const dest = path.join(botFolder, file);
-            if (fs.existsSync(src)) {
-                fs.copyFileSync(src, dest);
-            }
-        });
-
-        // Ensure index.js exists (aliased to main.js if needed)
-        const indexPath = path.join(botFolder, 'index.js');
-        if (!fs.existsSync(indexPath)) {
-            const mainPath = path.join(botFolder, 'main.js');
-            if (fs.existsSync(mainPath)) {
-                fs.copyFileSync(mainPath, indexPath);
-            }
-        }
-
-        // Create .env file
+        // Create .env file for this bot
         const envContent = `PHONE_NUMBER=${phoneNumber}
 SESSION=${session}
 BOT_PORT=${port}
-NODE_ENV=production`;
+NODE_ENV=production
+`;
 
-        const envPath = path.join(botFolder, '.env');
-        fs.writeFileSync(envPath, envContent, 'utf8');
-        console.log(`📝 Created .env for ${phoneNumber}`);
+        fs.writeFileSync(path.join(botFolder, '.env'), envContent, 'utf8');
+
+        console.log(`📝 Created .env for bot ${phoneNumber}`);
 
         return botFolder;
     } catch (error) {
@@ -70,7 +73,6 @@ NODE_ENV=production`;
         throw error;
     }
 }
-
 /**
  * Spawn a bot process
  */
