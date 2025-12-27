@@ -1,6 +1,8 @@
+import { execSync } from 'child_process';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import fsExtra from 'fs-extra';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -8,6 +10,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 👇 BOT TEMPLATE (source code lives here)
 // Resolve to absolute path for reliability
 const TEMPLATE_DIR = path.resolve(__dirname, '../code');
+
+try {
+    console.log('📦 Installing dependencies in the template folder...');
+    execSync('npm install', {
+        cwd: TEMPLATE_DIR, // Make sure this points to your template folder
+        stdio: 'inherit'
+    });
+    console.log('✅ Template dependencies installed');
+} catch (error) {
+    console.error('❌ Failed to install template dependencies:', error);
+    process.exit(1); // Stop startup if deps fail
+}
 
 // 👇 RUNNING BOTS DIRECTORY
 const BOTS_DIR = path.resolve(__dirname, '../bots');
@@ -61,27 +75,14 @@ NODE_ENV=production
 }
 
 function copyFiles(srcDir, destDir) {
-    // Create bot folder
     if (!fs.existsSync(destDir)) {
         fs.mkdirSync(destDir, { recursive: true });
         console.log(`📁 Created bot folder: ${destDir}`);
     }
 
-    // Copy bot package.json from template
-    const pkgSrc = path.join(srcDir, 'package.json');
-    const pkgDest = path.join(destDir, 'package.json');
-    if (!fs.existsSync(pkgSrc)) {
-        throw new Error('Bot template package.json not found');
-    }
-    fs.copyFileSync(pkgSrc, pkgDest);
-
-    // Copy bot entry file (index.js)
-    const entrySrc = path.join(srcDir, 'index.js');
-    const entryDest = path.join(destDir, 'index.js');
-    if (!fs.existsSync(entrySrc)) {
-        throw new Error('Bot template index.js not found');
-    }
-    fs.copyFileSync(entrySrc, entryDest);
+    // Use fs-extra to copy entire folder, including node_modules
+    fsExtra.copySync(srcDir, destDir, { overwrite: true });
+    console.log(`📄 Copied template to bot folder: ${destDir}`);
 }
 
 /**
