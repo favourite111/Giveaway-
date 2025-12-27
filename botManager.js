@@ -64,12 +64,22 @@ NODE_ENV=production
 function copyFiles(srcDir, destDir) {
     if (!fs.existsSync(destDir)) {
         fs.mkdirSync(destDir, { recursive: true });
-        console.log(`📁 Created bot folder: ${destDir}`);
     }
 
-    // Use fs-extra to copy entire folder, including node_modules
-    fsExtra.copySync(srcDir, destDir, { overwrite: true });
-    console.log(`📄 Copied template to bot folder: ${destDir}`);
+    // Copy bot template (NO node_modules)
+    fsExtra.copySync(srcDir, destDir, {
+        overwrite: true,
+        filter: (src) => !src.includes('node_modules')
+    });
+
+    // 🔥 LINK ROOT node_modules
+    const rootNodeModules = path.resolve(__dirname, '../node_modules');
+    const botNodeModules = path.join(destDir, 'node_modules');
+
+    if (!fs.existsSync(botNodeModules)) {
+        fs.symlinkSync(rootNodeModules, botNodeModules, 'dir');
+        console.log('🔗 Linked shared node_modules');
+    }
 }
 
 /**
