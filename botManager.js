@@ -6,10 +6,11 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // 👇 BOT TEMPLATE (source code lives here)
-const TEMPLATE_DIR = path.join(__dirname, '../code');
+// Resolve to absolute path for reliability
+const TEMPLATE_DIR = path.resolve(__dirname, '../code');
 
 // 👇 RUNNING BOTS DIRECTORY
-const BOTS_DIR = path.join(__dirname, '../bots');
+const BOTS_DIR = path.resolve(__dirname, '../bots');
 
 // Ensure bots directory exists
 if (!fs.existsSync(BOTS_DIR)) {
@@ -27,27 +28,20 @@ export function createBotFolder(phoneNumber, session, port) {
     try {
         const botFolder = path.join(BOTS_DIR, `bot_${phoneNumber}`);
 
-        // Create bot folder
-        if (!fs.existsSync(botFolder)) {
-            fs.mkdirSync(botFolder, { recursive: true });
-            console.log(`📁 Created bot folder: ${botFolder}`);
+        console.log(`🔍 Checking template path: ${TEMPLATE_DIR}`);
+        if (!fs.existsSync(TEMPLATE_DIR)) {
+            // Fallback for local development or different structures
+            const fallbackTemplate = path.join(process.cwd(), 'code');
+            if (fs.existsSync(fallbackTemplate)) {
+                console.log(`📍 Using fallback template: ${fallbackTemplate}`);
+                // Use fallback for this run
+                copyFiles(fallbackTemplate, botFolder);
+            } else {
+                throw new Error(`Bot template directory not found at ${TEMPLATE_DIR}`);
+            }
+        } else {
+            copyFiles(TEMPLATE_DIR, botFolder);
         }
-
-        // Copy bot package.json from template
-        const pkgSrc = path.join(TEMPLATE_DIR, 'package.json');
-        const pkgDest = path.join(botFolder, 'package.json');
-        if (!fs.existsSync(pkgSrc)) {
-            throw new Error('Bot template package.json not found');
-        }
-        fs.copyFileSync(pkgSrc, pkgDest);
-
-        // Copy bot entry file (index.js)
-        const entrySrc = path.join(TEMPLATE_DIR, 'index.js');
-        const entryDest = path.join(botFolder, 'index.js');
-        if (!fs.existsSync(entrySrc)) {
-            throw new Error('Bot template index.js not found');
-        }
-        fs.copyFileSync(entrySrc, entryDest);
 
         // Create .env file for this bot
         const envContent = `PHONE_NUMBER=${phoneNumber}
@@ -57,7 +51,6 @@ NODE_ENV=production
 `;
 
         fs.writeFileSync(path.join(botFolder, '.env'), envContent, 'utf8');
-
         console.log(`📝 Created .env for bot ${phoneNumber}`);
 
         return botFolder;
@@ -66,6 +59,31 @@ NODE_ENV=production
         throw error;
     }
 }
+
+function copyFiles(srcDir, destDir) {
+    // Create bot folder
+    if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true });
+        console.log(`📁 Created bot folder: ${destDir}`);
+    }
+
+    // Copy bot package.json from template
+    const pkgSrc = path.join(srcDir, 'package.json');
+    const pkgDest = path.join(destDir, 'package.json');
+    if (!fs.existsSync(pkgSrc)) {
+        throw new Error('Bot template package.json not found');
+    }
+    fs.copyFileSync(pkgSrc, pkgDest);
+
+    // Copy bot entry file (index.js)
+    const entrySrc = path.join(srcDir, 'index.js');
+    const entryDest = path.join(destDir, 'index.js');
+    if (!fs.existsSync(entrySrc)) {
+        throw new Error('Bot template index.js not found');
+    }
+    fs.copyFileSync(entrySrc, entryDest);
+}
+
 /**
  * Spawn a bot process
  */
