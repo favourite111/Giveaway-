@@ -45,12 +45,19 @@ export function createBotFolder(phoneNumber, session, port) {
         }
 
         // Create .env file for this bot
-        const envContent = `PHONE_NUMBER=${phoneNumber}
-SESSION=${session}
+        const envContent = `SESSION_ID=${session}
+OWNER_NUMBER=${phoneNumber}
 BOT_PORT=${port}
 NODE_ENV=production
 `;
 
+  console.log('🧪 Writing .env with content:\n', envContent);
+if (!envContent.includes('OWNER_NUMBER')) {
+  throw new Error('OWNER_NUMBER missing in .env');
+}
+        if (!envContent.includes('SESSION_ID')) {
+  throw new Error('SESSION_ID missing in .env');
+}        
         fs.writeFileSync(path.join(botFolder, '.env'), envContent, 'utf8');
         console.log(`📝 Created .env for bot ${phoneNumber}`);
 
