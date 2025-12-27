@@ -49,13 +49,6 @@ export function createBotFolder(phoneNumber, session, port) {
         }
         fs.copyFileSync(entrySrc, entryDest);
 
-        // Copy bot src directory (if exists)
-        const srcDir = path.join(TEMPLATE_DIR, 'src');
-        const destDir = path.join(botFolder, 'src');
-        if (fs.existsSync(srcDir)) {
-            fs.cpSync(srcDir, destDir, { recursive: true });
-        }
-
         // Create .env file for this bot
         const envContent = `PHONE_NUMBER=${phoneNumber}
 SESSION=${session}
