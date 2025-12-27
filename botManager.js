@@ -1,4 +1,3 @@
-import { execSync } from 'child_process';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -10,18 +9,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 👇 BOT TEMPLATE (source code lives here)
 // Resolve to absolute path for reliability
 const TEMPLATE_DIR = path.resolve(__dirname, '../code');
-
-try {
-    console.log('📦 Installing dependencies in the template folder...');
-    execSync('npm install', {
-        cwd: TEMPLATE_DIR, // Make sure this points to your template folder
-        stdio: 'inherit'
-    });
-    console.log('✅ Template dependencies installed');
-} catch (error) {
-    console.error('❌ Failed to install template dependencies:', error);
-    process.exit(1); // Stop startup if deps fail
-}
 
 // 👇 RUNNING BOTS DIRECTORY
 const BOTS_DIR = path.resolve(__dirname, '../bots');
