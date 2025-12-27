@@ -29,6 +29,35 @@ export function createBotFolder(phoneNumber, session, port) {
         }
 
         // Create .env file
+        Copy necessary files from root to bot folder
+        const filesToCopy = [
+            'package.json'
+        ];
+
+        filesToCopy.forEach(file => {
+            const src = path.join(__dirname, '..', file);
+            const dest = path.join(botFolder, file);
+            
+            if (fs.existsSync(src)) {
+                if (fs.lstatSync(src).isDirectory()) {
+                    // Use recursive copy for directories
+                    fs.cpSync(src, dest, { recursive: true });
+                } else {
+                    fs.copyFileSync(src, dest);
+                }
+            }
+        });
+
+        // Ensure index.js exists (aliased to main.js if needed)
+        const indexPath = path.join(botFolder, 'index.js');
+        if (!fs.existsSync(indexPath)) {
+            const mainPath = path.join(botFolder, 'main.js');
+            if (fs.existsSync(mainPath)) {
+                fs.copyFileSync(mainPath, indexPath);
+            }
+        }
+
+        // Create .env file
         const envContent = `PHONE_NUMBER=${phoneNumber}
 SESSION=${session}
 BOT_PORT=${port}
