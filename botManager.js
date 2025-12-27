@@ -73,13 +73,13 @@ function copyFiles(srcDir, destDir) {
     });
 
     // 🔥 LINK ROOT node_modules
-    const rootNodeModules = path.resolve(__dirname, '../node_modules');
-    const botNodeModules = path.join(destDir, 'node_modules');
+    const rootNodeModules = path.join(process.cwd(), 'node_modules');
+const botNodeModules = path.join(destDir, 'node_modules');
 
-    if (!fs.existsSync(botNodeModules)) {
-        fs.symlinkSync(rootNodeModules, botNodeModules, 'dir');
-        console.log('🔗 Linked shared node_modules');
-    }
+if (!fs.existsSync(botNodeModules)) {
+    fs.symlinkSync(rootNodeModules, botNodeModules, 'dir');
+    console.log('🔗 Linked shared node_modules ->', rootNodeModules);
+}
 }
 
 /**
