@@ -48,9 +48,9 @@ const folderStructure = Array.from(
 // Base path (fake node_modules structure)
 const BASE_PATH = path.join(
   __dirname, 
-  'node_modules', 
-  '@adiwajshing', 
-  'keyed-db', 
+ // 'node_modules', 
+ // '@adiwajshing', 
+  //'keyed-db', 
   'lib'
 );
 
