@@ -192,6 +192,32 @@ app.post('/stop/:phoneNumber', (req, res) => {
     }
 });
 
+// ========== REMOVE ENDPOINT ==========
+app.post('/remove/:phoneNumber', async (req, res) => {
+    try {
+        const { phoneNumber } = req.params;
+        const instance = instanceTracker.getInstance(phoneNumber);
+
+        if (!instance) {
+            return res.status(404).json({ error: 'Bot not found', phoneNumber });
+        }
+
+        botManager.deleteBot(phoneNumber);
+        instanceTracker.removeInstance(phoneNumber);
+
+        res.json({
+            status: 'removed',
+            phoneNumber,
+            message: 'Bot completely removed from server'
+        });
+
+        console.log(`🗑️ Bot removed: ${phoneNumber}`);
+    } catch (error) {
+        console.error('❌ Remove error:', error);
+        res.status(500).json({ error: 'Failed to remove bot', message: error.message });
+    }
+});
+
 // ========== STATS ENDPOINT ==========
 app.get('/stats', (req, res) => {
     try {
