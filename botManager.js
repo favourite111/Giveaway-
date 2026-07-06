@@ -119,26 +119,58 @@ export function spawnBot(phoneNumber, botFolder, port) {
         let logoutCount = 0;
         const LOGOUT_KILL_THRESHOLD = 3;
 
-        // Handle stdout
-        botProcess.stdout?.on('data', (data) => {
-            const text = data.toString().trim();
-            console.log(`[${phoneNumber}] ${text}`);
+        // Keywords that are worth logging — everything else is suppressed
+        const IMPORTANT = [
+            '[401]', 'logged out', 'disconnected', 'connected', 'online',
+            'error', 'failed', 'fatal', 'session', 'syncing', 'synced',
+            'starting', 'restarting', '[ cmd ]', 'sigterm', 'dashboard'
+        ];
 
-            // Detect WhatsApp 401 logout — stop bot after 3 hits to prevent infinite spam
-            if (text.includes('[401]') || text.includes('logged out')) {
-                logoutCount++;
-                if (logoutCount >= LOGOUT_KILL_THRESHOLD) {
-                    console.warn(`🔐 [${phoneNumber}] 401 logout loop detected (${logoutCount}x) — auto-killing. Redeploy with a fresh session.`);
-                    try { killBot(phoneNumber); } catch (_) {}
+        function isImportant(line) {
+            const lower = line.toLowerCase();
+            return IMPORTANT.some(kw => lower.includes(kw));
+        }
+
+        // Buffer stdout into complete lines before logging (prevents chunk fragmentation)
+        let stdoutBuffer = '';
+        botProcess.stdout?.on('data', (data) => {
+            stdoutBuffer += data.toString();
+            const lines = stdoutBuffer.split('\n');
+            // Keep the last incomplete chunk in the buffer
+            stdoutBuffer = lines.pop();
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+
+                // Only log lines that matter
+                if (isImportant(trimmed)) {
+                    console.log(`[${phoneNumber}] ${trimmed}`);
                 }
-            } else if (text.toLowerCase().includes('connected') || text.toLowerCase().includes('online')) {
-                logoutCount = 0; // reset counter on successful connection
+
+                // 401 logout loop detection
+                if (trimmed.includes('[401]') || trimmed.toLowerCase().includes('logged out')) {
+                    logoutCount++;
+                    if (logoutCount >= LOGOUT_KILL_THRESHOLD) {
+                        console.warn(`🔐 [${phoneNumber}] 401 loop (${logoutCount}x) — auto-killing. Needs fresh session.`);
+                        try { killBot(phoneNumber); } catch (_) {}
+                    }
+                } else if (trimmed.toLowerCase().includes('connected') || trimmed.toLowerCase().includes('online')) {
+                    logoutCount = 0; // reset on successful connection
+                }
             }
         });
 
-        // Handle stderr
+        // Buffer stderr the same way
+        let stderrBuffer = '';
         botProcess.stderr?.on('data', (data) => {
-            console.error(`[${phoneNumber}] ERROR: ${data.toString().trim()}`);
+            stderrBuffer += data.toString();
+            const lines = stderrBuffer.split('\n');
+            stderrBuffer = lines.pop();
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed) console.error(`[${phoneNumber}] ❌ ${trimmed}`);
+            }
         });
 
         // Handle process exit
