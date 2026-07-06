@@ -1,7 +1,7 @@
 {
   "name": "ultra-x-deployer",
   "version": "2.0.0",
-  "description": "Multi-bot deployer for Ultra-X / June-X WhatsApp bot instances",
+  "description": "Multi-bot deployer for Ultra-X WhatsApp bot instances",
   "type": "module",
   "main": "deployer-server.js",
   "scripts": {
@@ -42,6 +42,7 @@
     "nodemon": "^3.1.0",
     "pdf-parse": "^2.4.5",
     "pdfkit": "^0.18.0",
+    "pg": "^8.13.3",
     "pino": "^9.0.0",
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",

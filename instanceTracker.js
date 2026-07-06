@@ -1,185 +1,147 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+/**
+ * instanceTracker.js — PostgreSQL-backed bot instance tracker
+ * Drop-in replacement for the old JSON-file version.
+ * All functions are now async.
+ */
+
+import pool from './db.js';
 import botManager from './botManager.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const INSTANCES_FILE = path.join(__dirname, './instances.json');
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Load instances from file
+ * Get real-time status by combining DB record with live process info.
  */
-function loadInstances() {
-    try {
-        if (!fs.existsSync(INSTANCES_FILE)) {
-            return { instances: [], totalDeployed: 0, createdAt: new Date().toISOString() };
-        }
-        return JSON.parse(fs.readFileSync(INSTANCES_FILE, 'utf8'));
-    } catch (error) {
-        console.error('❌ Error loading instances:', error);
-        return { instances: [], totalDeployed: 0, createdAt: new Date().toISOString() };
-    }
-}
-
-/**
- * Save instances to file
- */
-function saveInstances(data) {
-    try {
-        fs.writeFileSync(INSTANCES_FILE, JSON.stringify(data, null, 2), 'utf8');
-        return true;
-    } catch (error) {
-        console.error('❌ Error saving instances:', error);
-        return false;
-    }
-}
-
-/**
- * Add new instance
- */
-export function addInstance(phoneNumber, port, sessionHash) {
-    try {
-        const data = loadInstances();
-        
-        // Check if already exists
-        if (data.instances.some(inst => inst.phoneNumber === phoneNumber)) {
-            throw new Error(`Bot ${phoneNumber} already exists`);
-        }
-
-        const instance = {
-            phoneNumber,
-            port,
-            sessionHash,
-            status: 'starting',
-            createdAt: new Date().toISOString(),
-            uptime: 0
-        };
-
-        data.instances.push(instance);
-        data.totalDeployed += 1;
-        
-        saveInstances(data);
-        console.log(`✅ Instance added: ${phoneNumber}`);
-        return instance;
-    } catch (error) {
-        console.error(`❌ Error adding instance:`, error);
-        throw error;
-    }
-}
-
-/**
- * Update instance status
- */
-export function updateInstanceStatus(phoneNumber, status) {
-    try {
-        const data = loadInstances();
-        const instance = data.instances.find(inst => inst.phoneNumber === phoneNumber);
-        
-        if (!instance) {
-            throw new Error(`Bot ${phoneNumber} not found`);
-        }
-
-        instance.status = status;
-        instance.lastStatusUpdate = new Date().toISOString();
-        
-        saveInstances(data);
-        return instance;
-    } catch (error) {
-        console.error(`❌ Error updating status:`, error);
-        throw error;
-    }
-}
-
-/**
- * Get instance by phone number
- */
-export function getInstance(phoneNumber) {
-    const data = loadInstances();
-    const instance = data.instances.find(inst => inst.phoneNumber === phoneNumber);
-    
-    if (!instance) return null;
-
-    // Get real-time status
-    const isRunning = botManager.isBotRunning(phoneNumber);
-    instance.status = isRunning ? 'online' : 'offline';
-    
-    if (isRunning) {
-        const uptime = botManager.getBotUptime(phoneNumber);
-        instance.uptime = `${uptime.hours}h ${uptime.minutes}m`;
-    } else {
-        instance.uptime = '0m';
-    }
-
-    return instance;
-}
-
-/**
- * Get all instances
- */
-export function getAllInstances() {
-    const data = loadInstances();
-    
-    return data.instances.map(instance => {
-        const isRunning = botManager.isBotRunning(instance.phoneNumber);
-        instance.status = isRunning ? 'online' : 'offline';
-        
-        if (isRunning) {
-            const uptime = botManager.getBotUptime(instance.phoneNumber);
-            instance.uptime = `${uptime.hours}h ${uptime.minutes}m`;
-        } else {
-            instance.uptime = '0m';
-        }
-        
-        return instance;
-    });
-}
-
-/**
- * Remove instance
- */
-export function removeInstance(phoneNumber) {
-    try {
-        const data = loadInstances();
-        const index = data.instances.findIndex(inst => inst.phoneNumber === phoneNumber);
-        
-        if (index === -1) {
-            throw new Error(`Bot ${phoneNumber} not found`);
-        }
-
-        data.instances.splice(index, 1);
-        saveInstances(data);
-        console.log(`✅ Instance removed: ${phoneNumber}`);
-        return true;
-    } catch (error) {
-        console.error(`❌ Error removing instance:`, error);
-        throw error;
-    }
-}
-
-/**
- * Get deployment stats
- */
-export function getStats() {
-    const data = loadInstances();
-    const instances = getAllInstances();
-    const onlineBots = instances.filter(inst => inst.status === 'online').length;
+function enrichWithLiveStatus(row) {
+    if (!row) return null;
+    const isRunning = botManager.isBotRunning(row.phone_number);
+    const uptime    = isRunning ? botManager.getBotUptime(row.phone_number) : null;
 
     return {
-        totalDeployed: data.totalDeployed,
-        currentInstances: instances.length,
-        onlineBots,
-        offlineBots: instances.length - onlineBots,
-        instances
+        phoneNumber:      row.phone_number,
+        port:             row.port,
+        sessionHash:      row.session_hash,
+        status:           isRunning ? 'online' : 'offline',
+        uptime:           isRunning && uptime ? `${uptime.hours}h ${uptime.minutes}m` : '0m',
+        createdAt:        row.created_at,
+        lastStatusUpdate: row.last_status_update
     };
 }
 
+// ─── Exported API ──────────────────────────────────────────────────────────────
+
+/**
+ * Add a new bot instance.
+ */
+export async function addInstance(phoneNumber, port, sessionHash) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        await client.query(
+            `INSERT INTO instances (phone_number, port, session_hash, status)
+             VALUES ($1, $2, $3, 'starting')`,
+            [phoneNumber, port, sessionHash]
+        );
+
+        // Increment total_deployed counter
+        await client.query(
+            `UPDATE deployer_meta SET value = (value::int + 1) WHERE key = 'total_deployed'`
+        );
+
+        await client.query('COMMIT');
+        console.log(`✅ Instance added: ${phoneNumber}`);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('❌ Error adding instance:', err);
+        throw err;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * Update a bot's status field in the DB.
+ */
+export async function updateInstanceStatus(phoneNumber, status) {
+    await pool.query(
+        `UPDATE instances
+         SET status = $1, last_status_update = NOW()
+         WHERE phone_number = $2`,
+        [status, phoneNumber]
+    );
+}
+
+/**
+ * Get a single instance (with live process status).
+ * Returns null if not found.
+ */
+export async function getInstance(phoneNumber) {
+    const { rows } = await pool.query(
+        `SELECT * FROM instances WHERE phone_number = $1`,
+        [phoneNumber]
+    );
+    return rows[0] ? enrichWithLiveStatus(rows[0]) : null;
+}
+
+/**
+ * Get all instances (with live process status).
+ */
+export async function getAllInstances() {
+    const { rows } = await pool.query(
+        `SELECT * FROM instances ORDER BY created_at ASC`
+    );
+    return rows.map(enrichWithLiveStatus);
+}
+
+/**
+ * Remove an instance record from the DB entirely.
+ */
+export async function removeInstance(phoneNumber) {
+    const { rowCount } = await pool.query(
+        `DELETE FROM instances WHERE phone_number = $1`,
+        [phoneNumber]
+    );
+    if (rowCount === 0) throw new Error(`Bot ${phoneNumber} not found`);
+    console.log(`✅ Instance removed: ${phoneNumber}`);
+}
+
+/**
+ * Get aggregated deployment stats.
+ */
+export async function getStats() {
+    const [{ rows: metaRows }, allInstances] = await Promise.all([
+        pool.query(`SELECT value FROM deployer_meta WHERE key = 'total_deployed'`),
+        getAllInstances()
+    ]);
+
+    const totalDeployed  = parseInt(metaRows[0]?.value ?? '0', 10);
+    const onlineBots     = allInstances.filter(i => i.status === 'online').length;
+
+    return {
+        totalDeployed,
+        currentInstances: allInstances.length,
+        onlineBots,
+        offlineBots:      allInstances.length - onlineBots,
+        instances:        allInstances
+    };
+}
+
+/**
+ * Get the highest port currently in use (for restoring portCounter on restart).
+ * Returns BASE_BOT_PORT - 1 if no instances exist.
+ */
+export async function getMaxPort(baseBotPort) {
+    const { rows } = await pool.query(`SELECT MAX(port) AS max_port FROM instances`);
+    return rows[0]?.max_port ?? (baseBotPort - 1);
+}
+
 export default {
-    loadInstances,
-    saveInstances,
     addInstance,
     updateInstanceStatus,
     getInstance,
     getAllInstances,
     removeInstance,
-    getStats
+    getStats,
+    getMaxPort
 };

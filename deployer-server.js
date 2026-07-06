@@ -1,288 +1,322 @@
-import express from 'express';
-import botManager from './botManager.js';
-import instanceTracker from './instanceTracker.js';
+/**
+ * deployer-server.js — Ultra-X Multi-Bot Deployer API
+ * PostgreSQL-backed, Koyeb-ready.
+ *
+ * Required env vars:
+ *   DATABASE_URL   — PostgreSQL connection string (Neon / Supabase / Render)
+ *   API_KEY        — Secret key for all mutating endpoints
+ *   PORT           — Assigned automatically by Koyeb (falls back to 5000)
+ *   MAX_BOTS       — Optional, default 10
+ */
 
-const app = express();
-const DEPLOYER_PORT = 5000;
+import express       from 'express';
+import dotenv        from 'dotenv';
+import botManager    from './botManager.js';
+import instanceTracker from './instanceTracker.js';
+import { initDB }    from './db.js';
+
+dotenv.config();
+
+const app           = express();
+const PORT          = process.env.PORT || 5000;
 const BASE_BOT_PORT = 5001;
+const MAX_BOTS      = parseInt(process.env.MAX_BOTS || '10', 10);
+const API_KEY       = process.env.API_KEY || '';
+
 let portCounter = BASE_BOT_PORT;
 
-// Middleware
+// ─── Middleware ────────────────────────────────────────────────────────────────
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ========== ROOT ENDPOINT ==========
+/**
+ * API Key guard — applied to all mutating endpoints (deploy / stop / remove).
+ * GET endpoints (status, stats, health) are public.
+ */
+function requireApiKey(req, res, next) {
+    if (!API_KEY) return next(); // No key configured — open (dev mode)
+    const provided = req.headers['x-api-key'] || req.query.apiKey;
+    if (provided !== API_KEY) {
+        return res.status(401).json({ error: 'Unauthorized — invalid or missing API key' });
+    }
+    next();
+}
+
+// ─── Health Check (Koyeb pings this) ──────────────────────────────────────────
+
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
+// ─── Root ──────────────────────────────────────────────────────────────────────
+
 app.get('/', (req, res) => {
     res.json({
-        service: 'Gift-X Bot Deployer',
-        version: '1.0.0',
+        service:   'Ultra-X Bot Deployer',
+        version:   '2.0.0',
         endpoints: {
-            deploy: 'POST /deploy?phoneNumber=xxx&session=base64string',
-            status_all: 'GET /status',
-            status_one: 'GET /status/:phoneNumber',
-            stop: 'POST /stop/:phoneNumber',
-            stats: 'GET /stats'
+            health:     'GET  /health',
+            deploy:     'POST /deploy          [API key required]',
+            status_all: 'GET  /status',
+            status_one: 'GET  /status/:phoneNumber',
+            stop:       'POST /stop/:phoneNumber   [API key required]',
+            remove:     'POST /remove/:phoneNumber [API key required]',
+            restart:    'POST /restart/:phoneNumber [API key required]',
+            stats:      'GET  /stats'
         }
     });
 });
 
-// ========== DEPLOY ENDPOINT ==========
-app.post('/deploy', async (req, res) => {
+// ─── Deploy ────────────────────────────────────────────────────────────────────
+
+app.post('/deploy', requireApiKey, async (req, res) => {
     try {
-        const phoneNumber = req.query.phoneNumber || req.body.phoneNumber;
-        const session = req.query.session || req.body.session;
+        const phoneNumber = req.body.phoneNumber || req.query.phoneNumber;
+        const session     = req.body.session     || req.query.session;
 
         if (!phoneNumber || !session) {
             return res.status(400).json({
-                error: 'Missing required parameters',
-                required: ['phoneNumber', 'session'],
-                example: 'POST /deploy?phoneNumber=234901234567&session=base64string'
+                error:    'Missing required parameters',
+                required: ['phoneNumber', 'session']
             });
         }
 
-        // Check if bot already exists
-        if (instanceTracker.getInstance(phoneNumber)) {
-            return res.status(409).json({
-                error: 'Bot already deployed',
-                phoneNumber
+        // Validate session prefix
+        const validPrefixes = ['Ultra-X:~', 'JUNE-MD:~', 'June-Ultra:~'];
+        if (!validPrefixes.some(p => session.startsWith(p))) {
+            return res.status(400).json({
+                error:   'Invalid session format',
+                hint:    `Session must start with one of: ${validPrefixes.join(', ')}`
             });
         }
 
-        // Check bot limit (max 10)
-        const stats = instanceTracker.getStats();
-        if (stats.currentInstances >= 10) {
+        // Validate phone number (digits only, 7–15 chars)
+        const cleanPhone = phoneNumber.replace(/\D/g, '');
+        if (cleanPhone.length < 7 || cleanPhone.length > 15) {
+            return res.status(400).json({ error: 'Invalid phone number format' });
+        }
+
+        // Check duplicate
+        if (await instanceTracker.getInstance(cleanPhone)) {
+            return res.status(409).json({ error: 'Bot already deployed', phoneNumber: cleanPhone });
+        }
+
+        // Check bot limit
+        const stats = await instanceTracker.getStats();
+        if (stats.currentInstances >= MAX_BOTS) {
             return res.status(429).json({
-                error: 'Maximum bots limit reached',
-                limit: 10,
+                error:   'Maximum bot limit reached',
+                limit:   MAX_BOTS,
                 current: stats.currentInstances
             });
         }
 
-        const port = portCounter++;
-        const sessionHash = session.substring(0, 20) + '...'; // Hide full session
+        const port        = portCounter++;
+        const sessionHash = session.substring(0, 20) + '...';
 
-        // Create bot folder
-        const botFolder = botManager.createBotFolder(phoneNumber, session, port);
+        const botFolder = botManager.createBotFolder(cleanPhone, session, port);
+        await instanceTracker.addInstance(cleanPhone, port, sessionHash);
 
-        // Add instance to tracker BEFORE spawning
-        instanceTracker.addInstance(phoneNumber, port, sessionHash);
-
-        // Spawn bot process
         try {
-            botManager.spawnBot(phoneNumber, botFolder, port);
-            instanceTracker.updateInstanceStatus(phoneNumber, 'online');
-
-            res.status(201).json({
-                status: 'deployed',
-                phoneNumber,
-                port,
-                botFolder,
-                message: 'Bot deployed successfully and starting...',
-                checkStatus: `GET /status/${phoneNumber}`
-            });
-
-            console.log(`✅ Bot deployed: ${phoneNumber} on port ${port}`);
-        } catch (spawnError) {
-            instanceTracker.updateInstanceStatus(phoneNumber, 'failed');
-            throw spawnError;
+            botManager.spawnBot(cleanPhone, botFolder, port);
+            await instanceTracker.updateInstanceStatus(cleanPhone, 'online');
+        } catch (spawnErr) {
+            await instanceTracker.updateInstanceStatus(cleanPhone, 'failed');
+            throw spawnErr;
         }
 
-    } catch (error) {
-        console.error('❌ Deploy error:', error);
-        res.status(500).json({
-            error: 'Failed to deploy bot',
-            message: error.message
+        console.log(`✅ Bot deployed: ${cleanPhone} on port ${port}`);
+        res.status(201).json({
+            status:      'deployed',
+            phoneNumber: cleanPhone,
+            port,
+            message:     'Bot deployed and starting...',
+            checkStatus: `/status/${cleanPhone}`
         });
+
+    } catch (err) {
+        console.error('❌ Deploy error:', err);
+        res.status(500).json({ error: 'Failed to deploy bot', message: err.message });
     }
 });
 
-// ========== STATUS ENDPOINTS ==========
-app.get('/status', (req, res) => {
+// ─── Status ────────────────────────────────────────────────────────────────────
+
+app.get('/status', async (req, res) => {
     try {
-        const stats = instanceTracker.getStats();
+        const stats = await instanceTracker.getStats();
         res.json({
-            totalDeployed: stats.totalDeployed,
+            totalDeployed:    stats.totalDeployed,
             currentInstances: stats.currentInstances,
-            onlineBots: stats.onlineBots,
-            offlineBots: stats.offlineBots,
-            bots: stats.instances.map(inst => ({
-                phoneNumber: inst.phoneNumber,
-                status: inst.status,
-                uptime: inst.uptime,
-                port: inst.port,
-                createdAt: inst.createdAt
-            }))
+            onlineBots:       stats.onlineBots,
+            offlineBots:      stats.offlineBots,
+            bots:             stats.instances
         });
-    } catch (error) {
-        console.error('❌ Status error:', error);
-        res.status(500).json({
-            error: 'Failed to fetch status',
-            message: error.message
-        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch status', message: err.message });
     }
 });
 
-app.get('/status/:phoneNumber', (req, res) => {
+app.get('/status/:phoneNumber', async (req, res) => {
     try {
-        const { phoneNumber } = req.params;
-        const instance = instanceTracker.getInstance(phoneNumber);
-
+        const instance = await instanceTracker.getInstance(req.params.phoneNumber);
         if (!instance) {
-            return res.status(404).json({
-                error: 'Bot not found',
-                phoneNumber
-            });
+            return res.status(404).json({ error: 'Bot not found', phoneNumber: req.params.phoneNumber });
         }
-
-        res.json({
-            phoneNumber: instance.phoneNumber,
-            status: instance.status,
-            uptime: instance.uptime,
-            port: instance.port,
-            createdAt: instance.createdAt,
-            lastStatusUpdate: instance.lastStatusUpdate
-        });
-    } catch (error) {
-        console.error('❌ Status error:', error);
-        res.status(500).json({
-            error: 'Failed to fetch status',
-            message: error.message
-        });
+        res.json(instance);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch status', message: err.message });
     }
 });
 
-// ========== STOP ENDPOINT ==========
-app.post('/stop/:phoneNumber', (req, res) => {
+// ─── Stop ──────────────────────────────────────────────────────────────────────
+
+app.post('/stop/:phoneNumber', requireApiKey, async (req, res) => {
     try {
         const { phoneNumber } = req.params;
-        const instance = instanceTracker.getInstance(phoneNumber);
-
+        const instance = await instanceTracker.getInstance(phoneNumber);
         if (!instance) {
-            return res.status(404).json({
-                error: 'Bot not found',
-                phoneNumber
-            });
+            return res.status(404).json({ error: 'Bot not found', phoneNumber });
         }
 
-        // Kill bot process
-        const killed = botManager.killBot(phoneNumber);
+        botManager.killBot(phoneNumber);
+        await instanceTracker.updateInstanceStatus(phoneNumber, 'stopped');
 
-        if (!killed) {
-            return res.status(500).json({
-                error: 'Failed to stop bot',
-                phoneNumber
-            });
-        }
-
-        instanceTracker.updateInstanceStatus(phoneNumber, 'stopped');
-
-        res.json({
-            status: 'stopped',
-            phoneNumber,
-            message: 'Bot stopped successfully'
-        });
-
-        console.log(`✅ Bot stopped: ${phoneNumber}`);
-    } catch (error) {
-        console.error('❌ Stop error:', error);
-        res.status(500).json({
-            error: 'Failed to stop bot',
-            message: error.message
-        });
+        console.log(`🛑 Bot stopped: ${phoneNumber}`);
+        res.json({ status: 'stopped', phoneNumber, message: 'Bot stopped successfully' });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to stop bot', message: err.message });
     }
 });
 
-// ========== REMOVE ENDPOINT ==========
-app.post('/remove/:phoneNumber', async (req, res) => {
+// ─── Remove ────────────────────────────────────────────────────────────────────
+
+app.post('/remove/:phoneNumber', requireApiKey, async (req, res) => {
     try {
         const { phoneNumber } = req.params;
-        const instance = instanceTracker.getInstance(phoneNumber);
-
+        const instance = await instanceTracker.getInstance(phoneNumber);
         if (!instance) {
             return res.status(404).json({ error: 'Bot not found', phoneNumber });
         }
 
         botManager.deleteBot(phoneNumber);
-        instanceTracker.removeInstance(phoneNumber);
-
-        res.json({
-            status: 'removed',
-            phoneNumber,
-            message: 'Bot completely removed from server'
-        });
+        await instanceTracker.removeInstance(phoneNumber);
 
         console.log(`🗑️ Bot removed: ${phoneNumber}`);
-    } catch (error) {
-        console.error('❌ Remove error:', error);
-        res.status(500).json({ error: 'Failed to remove bot', message: error.message });
+        res.json({ status: 'removed', phoneNumber, message: 'Bot completely removed from server' });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to remove bot', message: err.message });
     }
 });
 
-// ========== STATS ENDPOINT ==========
-app.get('/stats', (req, res) => {
+// ─── Restart ───────────────────────────────────────────────────────────────────
+
+app.post('/restart/:phoneNumber', requireApiKey, async (req, res) => {
     try {
-        const stats = instanceTracker.getStats();
+        const { phoneNumber } = req.params;
+        const instance = await instanceTracker.getInstance(phoneNumber);
+        if (!instance) {
+            return res.status(404).json({ error: 'Bot not found', phoneNumber });
+        }
+
+        botManager.killBot(phoneNumber);
+        await instanceTracker.updateInstanceStatus(phoneNumber, 'starting');
+
+        const botFolder = `${process.cwd()}/bots/bot_${phoneNumber}`;
+        botManager.spawnBot(phoneNumber, botFolder, instance.port);
+        await instanceTracker.updateInstanceStatus(phoneNumber, 'online');
+
+        console.log(`🔄 Bot restarted: ${phoneNumber}`);
+        res.json({ status: 'restarted', phoneNumber, port: instance.port, message: 'Bot restarted successfully' });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to restart bot', message: err.message });
+    }
+});
+
+// ─── Stats ─────────────────────────────────────────────────────────────────────
+
+app.get('/stats', async (req, res) => {
+    try {
+        const stats = await instanceTracker.getStats();
         res.json({
             deployment: {
-                totalDeployed: stats.totalDeployed,
+                totalDeployed:    stats.totalDeployed,
                 currentInstances: stats.currentInstances
             },
             status: {
-                online: stats.onlineBots,
+                online:  stats.onlineBots,
                 offline: stats.offlineBots
             },
-            bots: stats.instances.length > 0 ? stats.instances : []
+            bots: stats.instances
         });
-    } catch (error) {
-        console.error('❌ Stats error:', error);
-        res.status(500).json({
-            error: 'Failed to fetch stats',
-            message: error.message
-        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch stats', message: err.message });
     }
 });
 
-// ========== ERROR HANDLERS ==========
+// ─── 404 / Error handlers ──────────────────────────────────────────────────────
+
 app.use((req, res) => {
-    res.status(404).json({
-        error: 'Endpoint not found',
-        path: req.path,
-        method: req.method,
-        available: ['GET /', 'POST /deploy', 'GET /status', 'GET /status/:phoneNumber', 'POST /stop/:phoneNumber', 'GET /stats']
-    });
+    res.status(404).json({ error: 'Endpoint not found', path: req.path });
 });
 
-app.use((error, req, res, next) => {
-    console.error('Server error:', error);
-    res.status(500).json({
-        error: 'Internal server error',
-        message: error.message
-    });
+app.use((err, req, res, _next) => {
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Internal server error', message: err.message });
 });
 
-// ========== START SERVER ==========
-const server = app.listen(DEPLOYER_PORT, '0.0.0.0', () => {
-    console.log(`
+// ─── Startup ───────────────────────────────────────────────────────────────────
+
+async function start() {
+    // 1. Connect DB + create tables
+    await initDB();
+
+    // 2. Restore portCounter from DB so restarts don't collide
+    const maxPort = await instanceTracker.getMaxPort(BASE_BOT_PORT);
+    portCounter = maxPort + 1;
+    console.log(`🔢 Port counter restored to ${portCounter}`);
+
+    // 3. Re-spawn bots that were online before the restart
+    const allInstances = await instanceTracker.getAllInstances();
+    const onlineAtShutdown = allInstances.filter(i => i.status === 'online' || i.status === 'starting');
+
+    if (onlineAtShutdown.length > 0) {
+        console.log(`♻️  Re-spawning ${onlineAtShutdown.length} bot(s) from last session...`);
+        for (const inst of onlineAtShutdown) {
+            try {
+                const botFolder = `${process.cwd()}/bots/bot_${inst.phoneNumber}`;
+                botManager.spawnBot(inst.phoneNumber, botFolder, inst.port);
+                console.log(`✅ Restored: ${inst.phoneNumber}`);
+            } catch (err) {
+                console.error(`❌ Failed to restore ${inst.phoneNumber}:`, err.message);
+                await instanceTracker.updateInstanceStatus(inst.phoneNumber, 'offline');
+            }
+        }
+    }
+
+    // 4. Start server
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`
 ╔════════════════════════════════════╗
-║   Gift-X Bot Deployer Running      ║
+║   Ultra-X Bot Deployer v2.0        ║
 ╚════════════════════════════════════╝
-
-🚀 API Server: http://0.0.0.0:${DEPLOYER_PORT}
-📊 Status Endpoint: GET /status
-🚀 Deploy Endpoint: POST /deploy
-⏹️  Stop Endpoint: POST /stop/:phoneNumber
-
-Happy deploying! 🎉
-    `);
-});
+🚀 Running on port ${PORT}
+🔒 API Key: ${API_KEY ? 'enabled' : 'disabled (set API_KEY to enable)'}
+🤖 Max bots: ${MAX_BOTS}
+        `);
+    });
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('🛑 Shutting down deployer server...');
-    server.close(() => {
-        console.log('✅ Deployer server closed');
-        process.exit(0);
-    });
+    console.log('🛑 Shutting down...');
+    process.exit(0);
+});
+
+start().catch(err => {
+    console.error('❌ Failed to start deployer:', err);
+    process.exit(1);
 });
 
 export default app;
