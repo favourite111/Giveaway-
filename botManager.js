@@ -183,6 +183,21 @@ export function killBot(phoneNumber) {
         return false;
     }
 }
+/**
+ * Completely delete a bot — kill process + wipe folder
+ */
+export function deleteBot(phoneNumber) {
+    // Kill if running (ignore errors if already dead)
+    try { killBot(phoneNumber); } catch (_) {}
+
+    // Delete bot folder from disk
+    const botFolder = path.join(BOTS_DIR, `bot_${phoneNumber}`);
+    if (fs.existsSync(botFolder)) {
+        fsExtra.removeSync(botFolder);
+        console.log(`🗑️ Deleted bot folder for ${phoneNumber}`);
+    }
+    return true;
+}
 
 /**
  * Get running process info
@@ -241,6 +256,7 @@ export default {
     createBotFolder,
     spawnBot,
     killBot,
+    deleteBot,
     getBotProcess,
     getAllRunningBots,
     isBotRunning,
