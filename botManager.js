@@ -105,19 +105,35 @@ export function spawnBot(phoneNumber, botFolder, port) {
 
         // Spawn bot process
         const botProcess = spawn('node', [indexPath], {
-    cwd: botFolder,
-    stdio: 'pipe',
-    detached: true,
-    env: {
-        ...process.env,
-        PORT: port.toString(), // ← ADD THIS LINE
-        NODE_ENV: 'production'
-    }
-});
+            cwd: botFolder,
+            stdio: 'pipe',
+            detached: true,
+            env: {
+                ...process.env,
+                PORT: port.toString(), // Override Render's PORT so bot doesn't collide with deployer
+                NODE_ENV: 'production'
+            }
+        });
+
+        // 401 logout loop detection
+        let logoutCount = 0;
+        const LOGOUT_KILL_THRESHOLD = 3;
 
         // Handle stdout
         botProcess.stdout?.on('data', (data) => {
-            console.log(`[${phoneNumber}] ${data.toString().trim()}`);
+            const text = data.toString().trim();
+            console.log(`[${phoneNumber}] ${text}`);
+
+            // Detect WhatsApp 401 logout — stop bot after 3 hits to prevent infinite spam
+            if (text.includes('[401]') || text.includes('logged out')) {
+                logoutCount++;
+                if (logoutCount >= LOGOUT_KILL_THRESHOLD) {
+                    console.warn(`🔐 [${phoneNumber}] 401 logout loop detected (${logoutCount}x) — auto-killing. Redeploy with a fresh session.`);
+                    try { killBot(phoneNumber); } catch (_) {}
+                }
+            } else if (text.toLowerCase().includes('connected') || text.toLowerCase().includes('online')) {
+                logoutCount = 0; // reset counter on successful connection
+            }
         });
 
         // Handle stderr
@@ -184,21 +200,6 @@ export function killBot(phoneNumber) {
         return false;
     }
 }
-/**
- * Completely delete a bot — kill process + wipe folder
- */
-export function deleteBot(phoneNumber) {
-    // Kill if running (ignore errors if already dead)
-    try { killBot(phoneNumber); } catch (_) {}
-
-    // Delete bot folder from disk
-    const botFolder = path.join(BOTS_DIR, `bot_${phoneNumber}`);
-    if (fs.existsSync(botFolder)) {
-        fsExtra.removeSync(botFolder);
-        console.log(`🗑️ Deleted bot folder for ${phoneNumber}`);
-    }
-    return true;
-}
 
 /**
  * Get running process info
@@ -257,7 +258,6 @@ export default {
     createBotFolder,
     spawnBot,
     killBot,
-    deleteBot,
     getBotProcess,
     getAllRunningBots,
     isBotRunning,
