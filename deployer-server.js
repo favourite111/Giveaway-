@@ -116,10 +116,10 @@ app.post('/deploy', requireApiKey, async (req, res) => {
         const sessionHash = session.substring(0, 20) + '...';
 
         const botFolder = botManager.createBotFolder(cleanPhone, session, port);
-        await instanceTracker.addInstance(cleanPhone, port, sessionHash);
+        await instanceTracker.addInstance(cleanPhone, port, sessionHash, session); // full session stored for crash-recovery
 
         try {
-            botManager.spawnBot(cleanPhone, botFolder, port);
+            botManager.spawnBot(cleanPhone, botFolder, port, port);
             await instanceTracker.updateInstanceStatus(cleanPhone, 'online');
         } catch (spawnErr) {
             await instanceTracker.updateInstanceStatus(cleanPhone, 'failed');
@@ -160,9 +160,10 @@ app.get('/status', async (req, res) => {
 
 app.get('/status/:phoneNumber', async (req, res) => {
     try {
-        const instance = await instanceTracker.getInstance(req.params.phoneNumber);
+        const phoneNumber = req.params.phoneNumber.replace(/\D/g, '');
+        const instance = await instanceTracker.getInstance(phoneNumber);
         if (!instance) {
-            return res.status(404).json({ error: 'Bot not found', phoneNumber: req.params.phoneNumber });
+            return res.status(404).json({ error: 'Bot not found', phoneNumber });
         }
         res.json(instance);
     } catch (err) {
@@ -174,7 +175,7 @@ app.get('/status/:phoneNumber', async (req, res) => {
 
 app.post('/stop/:phoneNumber', requireApiKey, async (req, res) => {
     try {
-        const { phoneNumber } = req.params;
+        const phoneNumber = req.params.phoneNumber.replace(/\D/g, '');
         const instance = await instanceTracker.getInstance(phoneNumber);
         if (!instance) {
             return res.status(404).json({ error: 'Bot not found', phoneNumber });
@@ -194,7 +195,7 @@ app.post('/stop/:phoneNumber', requireApiKey, async (req, res) => {
 
 app.post('/remove/:phoneNumber', requireApiKey, async (req, res) => {
     try {
-        const { phoneNumber } = req.params;
+        const phoneNumber = req.params.phoneNumber.replace(/\D/g, '');
         const instance = await instanceTracker.getInstance(phoneNumber);
         if (!instance) {
             return res.status(404).json({ error: 'Bot not found', phoneNumber });
@@ -214,7 +215,7 @@ app.post('/remove/:phoneNumber', requireApiKey, async (req, res) => {
 
 app.post('/restart/:phoneNumber', requireApiKey, async (req, res) => {
     try {
-        const { phoneNumber } = req.params;
+        const phoneNumber = req.params.phoneNumber.replace(/\D/g, '');
         const instance = await instanceTracker.getInstance(phoneNumber);
         if (!instance) {
             return res.status(404).json({ error: 'Bot not found', phoneNumber });
@@ -223,8 +224,15 @@ app.post('/restart/:phoneNumber', requireApiKey, async (req, res) => {
         botManager.killBot(phoneNumber);
         await instanceTracker.updateInstanceStatus(phoneNumber, 'starting');
 
-        const botFolder = `${process.cwd()}/bots/bot_${phoneNumber}`;
-        botManager.spawnBot(phoneNumber, botFolder, instance.port);
+        // Use stored session for full re-deploy (handles ephemeral filesystem)
+        if (instance.session) {
+            const botFolder = botManager.createBotFolder(phoneNumber, instance.session, instance.port);
+            botManager.spawnBot(phoneNumber, botFolder, instance.port);
+        } else {
+            // Fallback: try existing folder (may fail on ephemeral hosts)
+            const botFolder = `${process.cwd()}/bots/bot_${phoneNumber}`;
+            botManager.spawnBot(phoneNumber, botFolder, instance.port);
+        }
         await instanceTracker.updateInstanceStatus(phoneNumber, 'online');
 
         console.log(`🔄 Bot restarted: ${phoneNumber}`);
@@ -277,19 +285,28 @@ async function start() {
     portCounter = maxPort + 1;
     console.log(`🔢 Port counter restored to ${portCounter}`);
 
-    // 3. Re-spawn bots that were online before the restart
-    const allInstances = await instanceTracker.getAllInstances();
-    const onlineAtShutdown = allInstances.filter(i => i.status === 'online' || i.status === 'starting');
+    // 3. Re-deploy bots that were online before the restart.
+    //    Uses raw DB status (not live process status) so this works at startup
+    //    before any bots are running. Also uses the stored full session to
+    //    re-create the bot folder — needed on ephemeral filesystems (Render/Koyeb).
+    const toRecover = await instanceTracker.getInstancesForRecovery();
 
-    if (onlineAtShutdown.length > 0) {
-        console.log(`♻️  Re-spawning ${onlineAtShutdown.length} bot(s) from last session...`);
-        for (const inst of onlineAtShutdown) {
+    if (toRecover.length > 0) {
+        console.log(`♻️  Recovering ${toRecover.length} bot(s) from last session...`);
+        for (const inst of toRecover) {
             try {
-                const botFolder = `${process.cwd()}/bots/bot_${inst.phoneNumber}`;
+                if (!inst.session) {
+                    console.warn(`⚠️  No session stored for ${inst.phoneNumber} — skipping (redeploy manually)`);
+                    await instanceTracker.updateInstanceStatus(inst.phoneNumber, 'offline');
+                    continue;
+                }
+                // Full re-deploy: recreates bot folder + .env from stored session
+                const botFolder = botManager.createBotFolder(inst.phoneNumber, inst.session, inst.port);
                 botManager.spawnBot(inst.phoneNumber, botFolder, inst.port);
-                console.log(`✅ Restored: ${inst.phoneNumber}`);
+                await instanceTracker.updateInstanceStatus(inst.phoneNumber, 'online');
+                console.log(`✅ Recovered: ${inst.phoneNumber} on port ${inst.port}`);
             } catch (err) {
-                console.error(`❌ Failed to restore ${inst.phoneNumber}:`, err.message);
+                console.error(`❌ Failed to recover ${inst.phoneNumber}:`, err.message);
                 await instanceTracker.updateInstanceStatus(inst.phoneNumber, 'offline');
             }
         }

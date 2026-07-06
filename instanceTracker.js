@@ -32,16 +32,18 @@ function enrichWithLiveStatus(row) {
 
 /**
  * Add a new bot instance.
+ * @param {string} session - Full session string (stored for crash-recovery re-deploy)
+ * @param {string} sessionHash - Truncated display hash shown in status responses
  */
-export async function addInstance(phoneNumber, port, sessionHash) {
+export async function addInstance(phoneNumber, port, sessionHash, session) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
         await client.query(
-            `INSERT INTO instances (phone_number, port, session_hash, status)
-             VALUES ($1, $2, $3, 'starting')`,
-            [phoneNumber, port, sessionHash]
+            `INSERT INTO instances (phone_number, port, session_hash, session, status)
+             VALUES ($1, $2, $3, $4, 'starting')`,
+            [phoneNumber, port, sessionHash, session]
         );
 
         // Increment total_deployed counter
@@ -95,6 +97,28 @@ export async function getAllInstances() {
 }
 
 /**
+ * Get raw DB rows for instances that were online at last shutdown.
+ * Unlike getAllInstances(), this does NOT enrich with live process status —
+ * so it works correctly at startup before any bots have been re-spawned.
+ * Returns the full session string so the caller can do a full re-deploy.
+ */
+export async function getInstancesForRecovery() {
+    const { rows } = await pool.query(
+        `SELECT phone_number, port, session, session_hash, status
+         FROM instances
+         WHERE status IN ('online', 'starting')
+         ORDER BY created_at ASC`
+    );
+    return rows.map(r => ({
+        phoneNumber:  r.phone_number,
+        port:         r.port,
+        session:      r.session,
+        sessionHash:  r.session_hash,
+        status:       r.status
+    }));
+}
+
+/**
  * Remove an instance record from the DB entirely.
  */
 export async function removeInstance(phoneNumber) {
@@ -141,6 +165,7 @@ export default {
     updateInstanceStatus,
     getInstance,
     getAllInstances,
+    getInstancesForRecovery,
     removeInstance,
     getStats,
     getMaxPort

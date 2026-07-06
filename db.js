@@ -33,10 +33,14 @@ export async function initDB() {
             phone_number  VARCHAR(20)  PRIMARY KEY,
             port          INTEGER      NOT NULL,
             session_hash  TEXT,
+            session       TEXT,
             status        VARCHAR(20)  NOT NULL DEFAULT 'starting',
             created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
             last_status_update TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        -- Add session column if upgrading from an older schema
+        ALTER TABLE instances ADD COLUMN IF NOT EXISTS session TEXT;
 
         CREATE TABLE IF NOT EXISTS deployer_meta (
             key   TEXT PRIMARY KEY,
