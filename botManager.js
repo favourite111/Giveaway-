@@ -105,14 +105,15 @@ export function spawnBot(phoneNumber, botFolder, port) {
 
         // Spawn bot process
         const botProcess = spawn('node', [indexPath], {
-            cwd: botFolder,
-            stdio: 'pipe',
-            detached: true,
-            env: {
-                ...process.env,
-                NODE_ENV: 'production'
-            }
-        });
+    cwd: botFolder,
+    stdio: 'pipe',
+    detached: true,
+    env: {
+        ...process.env,
+        PORT: port.toString(), // ← ADD THIS LINE
+        NODE_ENV: 'production'
+    }
+});
 
         // Handle stdout
         botProcess.stdout?.on('data', (data) => {
