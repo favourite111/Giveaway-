@@ -119,7 +119,7 @@ app.post('/deploy', requireApiKey, async (req, res) => {
         await instanceTracker.addInstance(cleanPhone, port, sessionHash, session); // full session stored for crash-recovery
 
         try {
-            botManager.spawnBot(cleanPhone, botFolder, port, port);
+            botManager.spawnBot(cleanPhone, botFolder, port, { onAutoKill: onBotAutoKilled });
             await instanceTracker.updateInstanceStatus(cleanPhone, 'online');
         } catch (spawnErr) {
             await instanceTracker.updateInstanceStatus(cleanPhone, 'failed');
@@ -227,11 +227,11 @@ app.post('/restart/:phoneNumber', requireApiKey, async (req, res) => {
         // Use stored session for full re-deploy (handles ephemeral filesystem)
         if (instance.session) {
             const botFolder = botManager.createBotFolder(phoneNumber, instance.session, instance.port);
-            botManager.spawnBot(phoneNumber, botFolder, instance.port);
+            botManager.spawnBot(phoneNumber, botFolder, instance.port, { onAutoKill: onBotAutoKilled });
         } else {
             // Fallback: try existing folder (may fail on ephemeral hosts)
             const botFolder = `${process.cwd()}/bots/bot_${phoneNumber}`;
-            botManager.spawnBot(phoneNumber, botFolder, instance.port);
+            botManager.spawnBot(phoneNumber, botFolder, instance.port, { onAutoKill: onBotAutoKilled });
         }
         await instanceTracker.updateInstanceStatus(phoneNumber, 'online');
 
@@ -262,6 +262,22 @@ app.get('/stats', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch stats', message: err.message });
     }
 });
+
+// ─── Auto-kill callback (called by botManager when 401 loop detected) ──────────
+
+/**
+ * Called by botManager when it auto-kills a bot due to a 401 loop.
+ * Marks the bot as 'failed' in the DB so it isn't auto-recovered on next restart
+ * (the session is dead — it needs a fresh one before it can come back).
+ */
+async function onBotAutoKilled(phoneNumber) {
+    try {
+        await instanceTracker.updateInstanceStatus(phoneNumber, 'failed');
+        console.log(`📋 [${phoneNumber}] Status updated to 'failed' after 401 auto-kill`);
+    } catch (err) {
+        console.error(`❌ Failed to update status after auto-kill for ${phoneNumber}:`, err.message);
+    }
+}
 
 // ─── 404 / Error handlers ──────────────────────────────────────────────────────
 
@@ -302,7 +318,7 @@ async function start() {
                 }
                 // Full re-deploy: recreates bot folder + .env from stored session
                 const botFolder = botManager.createBotFolder(inst.phoneNumber, inst.session, inst.port);
-                botManager.spawnBot(inst.phoneNumber, botFolder, inst.port);
+                botManager.spawnBot(inst.phoneNumber, botFolder, inst.port, { onAutoKill: onBotAutoKilled });
                 await instanceTracker.updateInstanceStatus(inst.phoneNumber, 'online');
                 console.log(`✅ Recovered: ${inst.phoneNumber} on port ${inst.port}`);
             } catch (err) {
