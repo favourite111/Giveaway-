@@ -202,6 +202,24 @@ export function spawnBot(phoneNumber, botFolder, port) {
 }
 
 /**
+ * Delete a bot: kill process + remove folder from disk.
+ * Used by the /remove endpoint.
+ */
+export function deleteBot(phoneNumber) {
+    // Kill the process if it's running (ignore errors — may already be dead)
+    try { killBot(phoneNumber); } catch (_) {}
+
+    // Remove the bot folder from disk
+    const botFolder = path.join(BOTS_DIR, `bot_${phoneNumber}`);
+    if (fs.existsSync(botFolder)) {
+        fsExtra.removeSync(botFolder);
+        console.log(`🗑️ Deleted folder: ${botFolder}`);
+    } else {
+        console.log(`ℹ️  Folder already gone: ${botFolder}`);
+    }
+}
+
+/**
  * Kill a bot process
  */
 export function killBot(phoneNumber) {
@@ -260,14 +278,21 @@ export function getAllRunningBots() {
 export function isBotRunning(phoneNumber) {
     const botData = runningProcesses.get(phoneNumber);
     if (!botData) return false;
-    
-    // Check if process is still alive
+
+    // Signal 0 checks process existence without sending a real signal.
+    // ESRCH = process doesn't exist → remove from map.
+    // EPERM = process exists but we can't signal it (detached group) → still alive.
     try {
-        process.kill(botData.pid, 0); // Signal 0 checks if process exists
+        process.kill(botData.pid, 0);
         return true;
-    } catch {
-        runningProcesses.delete(phoneNumber);
-        return false;
+    } catch (err) {
+        if (err.code === 'ESRCH') {
+            // Process is truly gone
+            runningProcesses.delete(phoneNumber);
+            return false;
+        }
+        // EPERM or anything else — process exists, we just can't signal it
+        return true;
     }
 }
 
@@ -290,6 +315,7 @@ export default {
     createBotFolder,
     spawnBot,
     killBot,
+    deleteBot,
     getBotProcess,
     getAllRunningBots,
     isBotRunning,
