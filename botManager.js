@@ -92,7 +92,7 @@ if (!fs.existsSync(botNodeModules)) {
 /**
  * Spawn a bot process
  */
-export function spawnBot(phoneNumber, botFolder, port) {
+export function spawnBot(phoneNumber, botFolder, port, { onAutoKill } = {}) {
     try {
         console.log(`🚀 Spawning bot for ${phoneNumber} on port ${port}...`);
 
@@ -154,6 +154,12 @@ export function spawnBot(phoneNumber, botFolder, port) {
                     if (logoutCount >= LOGOUT_KILL_THRESHOLD) {
                         console.warn(`🔐 [${phoneNumber}] 401 loop (${logoutCount}x) — auto-killing. Needs fresh session.`);
                         try { killBot(phoneNumber); } catch (_) {}
+                        // Notify server so it can mark the bot as 'failed' in the DB
+                        if (typeof onAutoKill === 'function') {
+                            onAutoKill(phoneNumber).catch(err =>
+                                console.error(`[${phoneNumber}] onAutoKill callback error:`, err.message)
+                            );
+                        }
                     }
                 } else if (trimmed.toLowerCase().includes('connected') || trimmed.toLowerCase().includes('online')) {
                     logoutCount = 0; // reset on successful connection
